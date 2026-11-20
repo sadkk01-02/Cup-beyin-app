@@ -1,1 +1,0 @@
-# Cup-beyin-app
