@@ -464,7 +464,7 @@ class _ModeButton extends StatelessWidget {
               Text(
                 subtitle,
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 10, color: Colors.white75),
+                style: const TextStyle(fontSize: 10, color: Colors.white70),
               ),
             ],
           ),
