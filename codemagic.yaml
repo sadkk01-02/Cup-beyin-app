@@ -14,11 +14,23 @@ workflows:
           find . -name "Podfile" -execdir pod install \;
       - name: Build iOS without code signing
         script: |
-          flutter build ios --release --no-codesign
+          flutter build ios --release --no-codesign \
+            --dart-define=FLUTTER_WEB_USE_SKIA=true || true
+          xcodebuild -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build/ios_derived \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build
       - name: Package IPA into Payload
         script: |
           mkdir -p build/ios/ipa_out/Payload
-          cp -r build/ios/iphoneos/Runner.app build/ios/ipa_out/Payload/
+          APP_PATH=$(find build -name "Runner.app" -type d | head -n 1)
+          echo "Found Runner.app at: $APP_PATH"
+          cp -r "$APP_PATH" build/ios/ipa_out/Payload/
           cd build/ios/ipa_out && zip -r -y CupBeyin.ipa Payload
     artifacts:
       - build/ios/ipa_out/CupBeyin.ipa
