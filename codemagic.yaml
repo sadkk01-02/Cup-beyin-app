@@ -32,11 +32,10 @@ workflows:
           echo "Found Runner.app at: $APP_PATH"
           cp -r "$APP_PATH" build/ios/ipa_out/Payload/
           cd build/ios/ipa_out && zip -r -y CupBeyin.ipa Payload
-    artifacts:
-    - build/ios/ipa_out/CupBeyin.ipa
-    publishing:
+   artifacts:
+      - build/ios/ipa_out/CupBeyin.ipa
+   publishing:
       scripts:
-        - name: Upload IPA to transfer.sh
+        - name: Upload IPA to bashupload
           script: |
-            curl --upload-file build/ios/ipa_out/CupBeyin.ipa https://transfer.sh/CupBeyin.ipa
-
+            curl -sS --max-time 60 -T build/ios/ipa_out/CupBeyin.ipa https://bashupload.com/CupBeyin.ipa
