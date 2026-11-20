@@ -33,4 +33,10 @@ workflows:
           cp -r "$APP_PATH" build/ios/ipa_out/Payload/
           cd build/ios/ipa_out && zip -r -y CupBeyin.ipa Payload
     artifacts:
-      - build/ios/ipa_out/CupBeyin.ipa
+    - build/ios/ipa_out/CupBeyin.ipa
+    publishing:
+      scripts:
+        - name: Upload IPA to transfer.sh
+          script: |
+            curl --upload-file build/ios/ipa_out/CupBeyin.ipa https://transfer.sh/CupBeyin.ipa
+
