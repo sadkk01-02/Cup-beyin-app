@@ -65,7 +65,12 @@ workflows:
       - name: Install CocoaPods
         script: |
           set -e
-          cd ios && pod install --repo-update
+          mkdir -p ios
+          cd ios
+          if [ ! -f "Podfile" ]; then
+            pod init
+          fi
+          pod install --repo-update
       - name: Build iOS app without codesign
         script: |
           set -e
