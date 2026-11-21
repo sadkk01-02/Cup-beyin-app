@@ -10,9 +10,15 @@ workflows:
     scripts:
       - name: Get Flutter packages
         script: |
+          set -e
           flutter pub get
+          if [ ! -f "ios/Podfile" ]; then
+            flutter create --platforms=ios .
+            flutter pub get
+          fi
       - name: Ensure iOS deployment target and Info.plist permissions
         script: |
+          set -e
           python3 - <<'EOF'
           from pathlib import Path
           import plistlib
@@ -58,12 +64,15 @@ workflows:
           EOF
       - name: Install CocoaPods
         script: |
+          set -e
           cd ios && pod install --repo-update
       - name: Build iOS app without codesign
         script: |
+          set -e
           flutter build ios --release --no-codesign
       - name: Package unsigned IPA
         script: |
+          set -e
           mkdir -p build/ios/ipa_out/Payload
           cp -R build/ios/iphoneos/Runner.app build/ios/ipa_out/Payload/
           cd build/ios/ipa_out
@@ -81,6 +90,11 @@ workflows:
 
             if [ -z "$GH_RELEASE_TOKEN" ]; then
               echo "GH_RELEASE_TOKEN is missing"
+              exit 1
+            fi
+
+            if [ ! -f "$IPA_PATH" ]; then
+              echo "IPA file not found at $IPA_PATH"
               exit 1
             fi
 
