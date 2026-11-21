@@ -54,7 +54,7 @@ workflows:
                   "Cup Beyin cihazıyla BLE üzerinden veri alışverişi yapmak için Bluetooth kullanılır."
               )
               with plist_path.open("wb") as f:
-                plistlib.dump(data, f)
+                  plistlib.dump(data, f)
           EOF
       - name: Install CocoaPods
         script: |
@@ -69,8 +69,7 @@ workflows:
           cd build/ios/ipa_out
           zip -r -y CupBeyin.ipa Payload
     artifacts:
-      files:
-        - build/ios/ipa_out/CupBeyin.ipa
+      - build/ios/ipa_out/CupBeyin.ipa
     publishing:
       scripts:
         - name: Publish IPA to GitHub Release
