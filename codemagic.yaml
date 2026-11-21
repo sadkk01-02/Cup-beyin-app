@@ -1,80 +1,117 @@
 workflows:
-  ios-ipa-build:
-    name: iOS Unsigned IPA Build
+  ios-unsigned-ipa:
+    name: iOS Unsigned IPA
     max_build_duration: 60
     environment:
+      groups:
+        - release
       flutter: stable
       xcode: latest
     scripts:
       - name: Get Flutter packages
         script: |
           flutter pub get
+      - name: Ensure iOS deployment target and Info.plist permissions
+        script: |
+          python3 - <<'EOF'
+          from pathlib import Path
+          import plistlib
+
+          podfile = Path("ios/Podfile")
+          if podfile.exists():
+              txt = podfile.read_text(encoding="utf-8")
+              lines = txt.splitlines()
+              out = []
+              replaced = False
+              for line in lines:
+                  if "platform :ios," in line:
+                      indent = line[:len(line) - len(line.lstrip())]
+                      out.append(f"{indent}platform :ios, '13.0'")
+                      replaced = True
+                  else:
+                      out.append(line)
+              if not replaced:
+                  out.insert(0, "platform :ios, '13.0'")
+              podfile.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+          pbxproj = Path("ios/Runner.xcodeproj/project.pbxproj")
+          if pbxproj.exists():
+              s = pbxproj.read_text(encoding="utf-8")
+              s = s.replace("IPHONEOS_DEPLOYMENT_TARGET = 11.0;", "IPHONEOS_DEPLOYMENT_TARGET = 13.0;")
+              s = s.replace("IPHONEOS_DEPLOYMENT_TARGET = 12.0;", "IPHONEOS_DEPLOYMENT_TARGET = 13.0;")
+              pbxproj.write_text(s, encoding="utf-8")
+
+          plist_path = Path("ios/Runner/Info.plist")
+          if plist_path.exists():
+              with plist_path.open("rb") as f:
+                  data = plistlib.load(f)
+              data.setdefault(
+                  "NSBluetoothAlwaysUsageDescription",
+                  "Cup Beyin ESP32-S3 modülüne Bluetooth üzerinden bağlanmak için izin gereklidir."
+              )
+              data.setdefault(
+                  "NSBluetoothPeripheralUsageDescription",
+                  "Cup Beyin cihazıyla BLE üzerinden veri alışverişi yapmak için Bluetooth kullanılır."
+              )
+              with plist_path.open("wb") as f:
+                plistlib.dump(data, f)
+          EOF
       - name: Install CocoaPods
         script: |
-          find . -name "Podfile" -execdir pod install \;
-      - name: Build iOS without code signing
+          cd ios && pod install --repo-update
+      - name: Build iOS app without codesign
         script: |
-          flutter build ios --release --no-codesign \
-            --dart-define=FLUTTER_WEB_USE_SKIA=true || true
-          xcodebuild -workspace ios/Runner.xcworkspace \
-            -scheme Runner \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build/ios_derived \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            build
-      - name: Package IPA into Payload
+          flutter build ios --release --no-codesign
+      - name: Package unsigned IPA
         script: |
           mkdir -p build/ios/ipa_out/Payload
-          APP_PATH=$(find build -name "Runner.app" -type d | head -n 1)
-          echo "Found Runner.app at: $APP_PATH"
-          cp -r "$APP_PATH" build/ios/ipa_out/Payload/
-          cd build/ios/ipa_out && zip -r -y CupBeyin.ipa Payload 
-  artifacts:
-    - build/ios/ipa_out/CupBeyin.ipa
-  publishing:
-    scripts:
-      - name: Publish IPA to GitHub Release
-        script: |
-          set -e
-          TAG="ipa-latest"
-          REPO="sadkk01-02/Cup-beyin-app"
-          IPA_PATH="build/ios/ipa_out/CupBeyin.ipa"
+          cp -R build/ios/iphoneos/Runner.app build/ios/ipa_out/Payload/
+          cd build/ios/ipa_out
+          zip -r -y CupBeyin.ipa Payload
+    artifacts:
+      files:
+        - build/ios/ipa_out/CupBeyin.ipa
+    publishing:
+      scripts:
+        - name: Publish IPA to GitHub Release
+          script: |
+            set -e
+            TAG="ipa-latest"
+            REPO="sadkk01-02/Cup-beyin-app"
+            IPA_PATH="build/ios/ipa_out/CupBeyin.ipa"
 
-          if [ -z "$GH_RELEASE_TOKEN" ]; then
-            echo "GH_RELEASE_TOKEN is missing"
-            exit 1
-          fi
+            if [ -z "$GH_RELEASE_TOKEN" ]; then
+              echo "GH_RELEASE_TOKEN is missing"
+              exit 1
+            fi
 
-          AUTH_HEADER="Authorization: Bearer $GH_RELEASE_TOKEN"
-          ACCEPT_HEADER="Accept: application/vnd.github+json"
+            AUTH_HEADER="Authorization: Bearer $GH_RELEASE_TOKEN"
+            ACCEPT_HEADER="Accept: application/vnd.github+json"
 
-          RELEASE_JSON=$(curl -sS -H "$AUTH_HEADER" -H "$ACCEPT_HEADER" \
-            "https://api.github.com/repos/$REPO/releases/tags/$TAG" || true)
-          RELEASE_ID=$(echo "$RELEASE_JSON" | grep -m1 '"id":' | sed -E 's/[^0-9]*([0-9]+).*/\1/' || true)
+            RELEASE_JSON=$(curl -sS -H "$AUTH_HEADER" -H "$ACCEPT_HEADER" \
+              "https://api.github.com/repos/$REPO/releases/tags/$TAG" || true)
+            RELEASE_ID=$(echo "$RELEASE_JSON" | grep -m1 '"id":' | sed -E 's/[^0-9]*([0-9]+).*/\1/' || true)
 
-          if [ -n "$RELEASE_ID" ]; then
-            curl -sS -X DELETE -H "$AUTH_HEADER" -H "$ACCEPT_HEADER" \
-              "https://api.github.com/repos/$REPO/releases/$RELEASE_ID" >/dev/null
-          fi
+            if [ -n "$RELEASE_ID" ]; then
+              curl -sS -X DELETE -H "$AUTH_HEADER" -H "$ACCEPT_HEADER" \
+                "https://api.github.com/repos/$REPO/releases/$RELEASE_ID" >/dev/null
+            fi
 
-          CREATE_RES=$(curl -sS -X POST -H "$AUTH_HEADER" -H "$ACCEPT_HEADER" \
-            "https://api.github.com/repos/$REPO/releases" \
-            -d "{\"tag_name\":\"$TAG\",\"name\":\"CupBeyin IPA\",\"draft\":false,\"prerelease\":false}")
+            CREATE_RES=$(curl -sS -X POST -H "$AUTH_HEADER" -H "$ACCEPT_HEADER" \
+              "https://api.github.com/repos/$REPO/releases" \
+              -d "{\"tag_name\":\"$TAG\",\"name\":\"CupBeyin IPA\",\"draft\":false,\"prerelease\":false}")
 
-          UPLOAD_URL=$(echo "$CREATE_RES" | grep -m1 '"upload_url":' | sed -E 's/.*"upload_url": *"([^\{"]+).*/\1/')
+            UPLOAD_URL=$(echo "$CREATE_RES" | grep -m1 '"upload_url":' | sed -E 's/.*"upload_url": *"([^\{"]+).*/\1/')
 
-          if [ -z "$UPLOAD_URL" ]; then
-            echo "Failed to create release: $CREATE_RES"
-            exit 1
-          fi
+            if [ -z "$UPLOAD_URL" ]; then
+              echo "Failed to create release: $CREATE_RES"
+              exit 1
+            fi
 
-          curl -sS -X POST \
-            -H "$AUTH_HEADER" \
-            -H "Content-Type: application/octet-stream" \
-            --data-binary @"$IPA_PATH" \
-            "${UPLOAD_URL}?name=CupBeyin.ipa"
+            curl -sS -X POST \
+              -H "$AUTH_HEADER" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @"$IPA_PATH" \
+              "${UPLOAD_URL}?name=CupBeyin.ipa"
 
-          echo "Uploaded CupBeyin.ipa to GitHub Release ($TAG)"
+            echo "Uploaded CupBeyin.ipa to GitHub Release ($TAG)"
