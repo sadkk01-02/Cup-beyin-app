@@ -12,7 +12,7 @@ class CupBeyinApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'CUP Harici Beyin',
+      title: 'CG Harici Beyin',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF0A0A0D),
@@ -34,12 +34,14 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  final Guid serviceUuid = Guid("4fafc201-1fb5-459e-8fcc-c5c9c331914b");
-  final Guid statusUuid  = Guid("beb5483e-36e1-4688-b7f5-ea07361b26a8");
-  final Guid configUuid  = Guid("1c95d5e3-d8f7-413a-bf3d-7a2e5d7be87e");
+  static const String targetDeviceName = "CG-BEYİN-BLE";
+
+  final Guid serviceUuid = Guid("6E400001-B5A3-F393-E0A9-E50E24DCCA9E");
+  final Guid rxWriteUuid = Guid("6E400002-B5A3-F393-E0A9-E50E24DCCA9E"); // Uygulama -> ESP32
+  final Guid txNotifyUuid = Guid("6E400003-B5A3-F393-E0A9-E50E24DCCA9E"); // ESP32 -> Uygulama
 
   BluetoothDevice? connectedDevice;
-  BluetoothCharacteristic? configChar;
+  BluetoothCharacteristic? writeChar;
 
   int rpm = 0;
   bool launchActive = false;
@@ -48,18 +50,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String activeModeLabel = "HAZIR";
 
   double normRpm = 9500;
-  double launchRpm = 5500;
-  double cutMs = 40;
+  double launchRpm = 4500;
+  double cutMs = 35;
+
+  bool _matchesTarget(ScanResult r) {
+    final String pName = r.device.platformName.trim();
+    final String aName = r.advertisementData.advName.trim();
+    return pName == targetDeviceName ||
+        aName == targetDeviceName ||
+        pName.contains("BEYİN") ||
+        aName.contains("BEYİN");
+  }
 
   Future<void> scanAndConnect() async {
     if (isScanning) return;
     setState(() => isScanning = true);
 
-    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 6));
+    bool foundAndConnecting = false;
 
     final sub = FlutterBluePlus.scanResults.listen((results) async {
+      if (foundAndConnecting || connectedDevice != null) return;
       for (final ScanResult r in results) {
-        if (r.device.platformName == "CUP-BEYIN-BLE" && connectedDevice == null) {
+        if (_matchesTarget(r)) {
+          foundAndConnecting = true;
           await FlutterBluePlus.stopScan();
           try {
             await r.device.connect(autoConnect: false);
@@ -72,7 +85,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               if (state == BluetoothConnectionState.disconnected && mounted) {
                 setState(() {
                   connectedDevice = null;
-                  configChar = null;
+                  writeChar = null;
                   rpm = 0;
                   launchActive = false;
                   cutActive = false;
@@ -81,6 +94,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             });
             await discoverServices(r.device);
           } catch (_) {
+            foundAndConnecting = false;
             if (mounted) setState(() => isScanning = false);
           }
           break;
@@ -88,11 +102,59 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     });
 
-    await Future.delayed(const Duration(seconds: 6));
+    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 8));
+    await Future.delayed(const Duration(seconds: 8));
     await sub.cancel();
+
     if (mounted && isScanning) {
       setState(() => isScanning = false);
     }
+  }
+
+  void _parseTelemetry(String raw) {
+    // Örnek format: RPM:0,LAUNCH:0,CUT:0,MODE:0,MAX:9500,L_RPM:4500
+    final parts = raw.split(',');
+    int? parsedRpm;
+    bool? parsedLaunch;
+    bool? parsedCut;
+    int? parsedMode;
+    double? parsedMax;
+    double? parsedLaunchRpm;
+
+    for (final item in parts) {
+      final kv = item.split(':');
+      if (kv.length != 2) continue;
+      final key = kv[0].trim();
+      final val = kv[1].trim();
+
+      if (key == "RPM") {
+        parsedRpm = int.tryParse(val);
+      } else if (key == "LAUNCH") {
+        parsedLaunch = val == "1";
+      } else if (key == "CUT") {
+        parsedCut = val == "1";
+      } else if (key == "MODE") {
+        parsedMode = int.tryParse(val);
+      } else if (key == "MAX") {
+        parsedMax = double.tryParse(val);
+      } else if (key == "L_RPM") {
+        parsedLaunchRpm = double.tryParse(val);
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      if (parsedRpm != null) rpm = parsedRpm;
+      if (parsedLaunch != null) launchActive = parsedLaunch;
+      if (parsedCut != null) cutActive = parsedCut;
+      if (parsedMode != null) {
+        if (parsedMode == 0) activeModeLabel = "GÜNLÜK";
+        if (parsedMode == 1) activeModeLabel = "POPCORN";
+        if (parsedMode == 2) activeModeLabel = "ALEV / CUT";
+      }
+      if (parsedMax != null) normRpm = parsedMax.clamp(3000, 14000);
+      if (parsedLaunchRpm != null) launchRpm = parsedLaunchRpm.clamp(2500, 10000);
+    });
   }
 
   Future<void> discoverServices(BluetoothDevice device) async {
@@ -100,67 +162,68 @@ class _DashboardScreenState extends State<DashboardScreen> {
     for (final BluetoothService s in services) {
       if (s.uuid == serviceUuid) {
         for (final BluetoothCharacteristic c in s.characteristics) {
-          if (c.uuid == statusUuid) {
+          if (c.uuid == txNotifyUuid) {
             await c.setNotifyValue(true);
             c.onValueReceived.listen((value) {
               final String raw = utf8.decode(value, allowMalformed: true).trim();
-              final List<String> parts = raw.split(',');
-              if (parts.length == 3 && mounted) {
-                setState(() {
-                  rpm = int.tryParse(parts[0]) ?? 0;
-                  launchActive = parts[1] == '1';
-                  cutActive = parts[2] == '1';
-                });
+              if (raw.isNotEmpty) {
+                _parseTelemetry(raw);
               }
             });
-          } else if (c.uuid == configUuid) {
-            configChar = c;
-            final List<int> initVal = await c.read();
-            final String raw = utf8.decode(initVal, allowMalformed: true).trim();
-            final List<String> parts = raw.split(',');
-            if (parts.length == 3 && mounted) {
-              setState(() {
-                normRpm = (double.tryParse(parts[0]) ?? 9500).clamp(3000, 14000);
-                launchRpm = (double.tryParse(parts[1]) ?? 5500).clamp(2500, 10000);
-                cutMs = (double.tryParse(parts[2]) ?? 40).clamp(15, 120);
-              });
-            }
+          } else if (c.uuid == rxWriteUuid) {
+            writeChar = c;
           }
         }
       }
     }
   }
 
-  Future<void> saveSettings({String? modeName}) async {
-    if (modeName != null) {
+  Future<void> _sendCmd(String cmd) async {
+    if (writeChar == null) return;
+    final bool withoutResp = writeChar!.properties.writeWithoutResponse;
+    await writeChar!.write(utf8.encode(cmd), withoutResponse: withoutResp);
+    await Future.delayed(const Duration(milliseconds: 60));
+  }
+
+  Future<void> saveSettings({String? modeName, int? modeCode}) async {
+    if (modeName != null && mounted) {
       setState(() => activeModeLabel = modeName);
     }
-    if (configChar == null) {
+    if (writeChar == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Önce CG-BEYIN-BLE cihazına bağlan.")),
+          const SnackBar(content: Text("Önce CG-BEYİN-BLE cihazına bağlan.")),
         );
       }
       return;
     }
 
-    final String payload = "${normRpm.round()},${launchRpm.round()},${cutMs.round()}";
-    await configChar!.write(utf8.encode(payload));
+    if (modeCode != null) {
+      await _sendCmd("MODE:$modeCode");
+    }
+    await _sendCmd("MAX:${normRpm.round()}");
+    await _sendCmd("LAUNCH:${launchRpm.round()}");
+    await _sendCmd("CUT_MS:${cutMs.round()}");
+
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Kaydedildi: $payload")),
+        SnackBar(
+          content: Text(
+            "Gönderildi: MAX ${normRpm.round()} | LAUNCH ${launchRpm.round()} | ${cutMs.round()}ms",
+          ),
+        ),
       );
     }
   }
 
-  void applyPreset(String label, double n, double l, double m) {
+  void applyPreset(String label, int modeCode, double n, double l, double m) {
     setState(() {
       normRpm = n;
       launchRpm = l;
       cutMs = m;
       activeModeLabel = label;
     });
-    saveSettings(modeName: label);
+    saveSettings(modeName: label, modeCode: modeCode);
   }
 
   Color _rpmColor(int current) {
@@ -218,7 +281,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         padding: const EdgeInsets.all(14),
         child: Column(
           children: [
-            // --- DEVİR VE DURUM PANELİ ---
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(18),
@@ -287,10 +349,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ],
               ),
             ),
-
             const SizedBox(height: 14),
-
-            // --- HAZIR MOD BUTONLARI ---
             Row(
               children: [
                 Expanded(
@@ -298,7 +357,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     title: "GÜNLÜK",
                     subtitle: "9500 • 35ms",
                     color: const Color(0xFF263238),
-                    onTap: () => applyPreset("GÜNLÜK", 9500, 5500, 35),
+                    onTap: () => applyPreset("GÜNLÜK", 0, 9500, 4500, 35),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -307,7 +366,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     title: "POPCORN",
                     subtitle: "8500 • 25ms",
                     color: const Color(0xFFE65100),
-                    onTap: () => applyPreset("POPCORN", 8500, 5000, 25),
+                    onTap: () => applyPreset("POPCORN", 1, 8500, 4000, 25),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -316,15 +375,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     title: "ALEV / CUT",
                     subtitle: "8000 • 75ms",
                     color: const Color(0xFFB71C1C),
-                    onTap: () => applyPreset("ALEV / CUT", 8000, 4800, 75),
+                    onTap: () => applyPreset("ALEV / CUT", 2, 8000, 4800, 75),
                   ),
                 ),
               ],
             ),
-
             const SizedBox(height: 14),
-
-            // --- KAYDIRMALI AYARLAR ---
             _SliderTile(
               label: "Normal Kesici Devri",
               valueLabel: "${normRpm.round()} RPM",
@@ -361,9 +417,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 activeModeLabel = "ÖZEL";
               }),
             ),
-
             const SizedBox(height: 8),
-
             SizedBox(
               width: double.infinity,
               height: 54,
